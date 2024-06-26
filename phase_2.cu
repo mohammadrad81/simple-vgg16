@@ -3,6 +3,18 @@
 #include <cuda_runtime.h>
 #include <omp.h>
 
+#define MALLOC_ERROR "could not allocate memory";
+#define CNN_ERROR "error in CNN!";
+#define FC_ERROR "error in FC!";
+
+void handle(cudaError_t status, char* message){
+    if(status != cudaSuccess){
+        printf("message: %s\n", message);
+        printf("error string: %s\n", cudaGetErrorString(status));
+        exit(-1);
+    }
+}
+
 float rand_float(){
     return (2 * (float)(rand()) / (float)(RAND_MAX)) - 1.0;
 }
@@ -14,8 +26,13 @@ void fill_array(float* array, int length){
     }
 }
 
-void vgg_16(float* images, int image_count, int channels, int width, int height){
+float* vgg_16(float* host_images, int image_count, int channels, int width, int height){
+    float* dev_images = 0;
+    int image_vector_length = image_count * channels * width * height * sizeof(float);
+    handle(cudaMalloc((void**)&dev_images, image_vector_length, MALLOC_ERROR));
+    handle(cudaMemcpy(dev_images, host_images, image_vector_length));
     
+
 }
 
 int main(){
