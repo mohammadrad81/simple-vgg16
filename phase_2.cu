@@ -19,7 +19,14 @@ void handle(cudaError_t status, char* message){
     }
 }
 
-__global__ void pad_kernel(float* dev_input, float* dev_output, int width, int height, int channels, int pad_w, int pad_h){
+__global__ void pad_kernel(float* dev_input,
+                           float* dev_output,
+                           int width,
+                           int height,
+                           int channels,
+                           int pad_w,
+                           int pad_h){
+
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int channel = blockIdx.z;
@@ -36,7 +43,13 @@ __global__ void pad_kernel(float* dev_input, float* dev_output, int width, int h
     dev_output[position] = value;
 }
 
-float* pad_with_cuda(float* dev_input_image, int width, int height, int channels, int pad_w, int pad_h){
+float* pad_with_cuda(float* dev_input_image,
+                     int width,
+                     int height,
+                     int channels, 
+                     int pad_w, 
+                     int pad_h){
+
     int input_image_size = width * height * channels;
     int output_image_width = (width + 2 * pad_w);
     int output_image_height = (height + 2 * pad_h);
@@ -46,11 +59,18 @@ float* pad_with_cuda(float* dev_input_image, int width, int height, int channels
     dim3 gridDim(CEIL_DIV(width, 32), CEIL_DIV(height, 32), channels);
     dim3 blockDim(32, 32, 1);
     pad_kernel<<<gridDim, blockDim>>>(dev_input_image, dev_output_image, width, height, channels, pad_w, pad_h);
-    handle(cudaDeviceSynchronize());
+    handle(cudaDeviceSynchronize(), PAD_ERROR);
     return dev_output_image;
 }
 
-void max_pool_2D_kernel(float* dev_input_image, float* dev_output_image, int width, int height, int channels, int output_width, int output_height){
+void max_pool_2D_kernel(float* dev_input_image,
+                        float* dev_output_image, 
+                        int width,
+                        int height, 
+                        int channels, 
+                        int output_width, 
+                        int output_height){
+
     __shared__ float part[64][16];
     int row_in_block = threadIdx.y;
     int col_in_block = threadIdx.x;
@@ -85,7 +105,11 @@ void max_pool_2D_kernel(float* dev_input_image, float* dev_output_image, int wid
     }
 }
 
-float* max_pool_2D_with_cuda(float* dev_input_image, int width, int height, int channels){
+float* max_pool_2D_with_cuda(float* dev_input_image, 
+                             int width, 
+                             int height, 
+                             int channels){
+
     float* dev_output_image = 0;
     int output_image_width = width / 2;
     int output_image_height = height / 2;
@@ -98,7 +122,68 @@ float* max_pool_2D_with_cuda(float* dev_input_image, int width, int height, int 
     return dev_output_image;
 }
 
-float* conv2D_with_cuda(float* dev_input_image, int width, int height, int channels, float* kernel, int k_width, int k_height){
+__global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channels][heigth][width]
+                              int width,
+                              int height,
+                              int channels,
+                              float* kernel, // kernel[output_channels][channels][k_height][k_width]
+                              int k_width,
+                              int k_height,
+                              float* dev_output_image,
+                              int output_width,
+                              int output_height,
+                              int output_channels){ 
+    __shared__ float part[32][32];
+    __shared__ float channel_kernel[10][10];
+    int row_in_block = threadIdx.y;
+    int col_in_block = threadIdx.x;
+    int block_row = blockIdx.y;
+    int block_col = blockIdx.x;
+    int block_row_step = blockDim.y - k_height + 1;
+    int block_col_step = blockDim.x - k_width + 1;
+    int load_position_row = block_row * block_row_step + row_in_block;
+    int load_position_col = block_col * block_col_step + col_in_block;
+    int in_block_load_margin = row_in_block >= block_row_step || col_in_block >= block_col_step;
+    int in_input_image = load_position_row < height && load_position_col < width;
+    int in_output_image = (!in_block_load_margin) && (load_position_row < (output_height)) && (load_position_col < (output_width));
+    int thread_output_channel = blockDim.z;
+    float value = 0.0;
+    for(int current_input_channel = 0; current_input_channel < channels; current_input_channel++){
+        if(row_in_block < k_height && col_in_block < k_width){
+            channel_kernel[row_in_block][col_in_block] = kernel[(thread_output_channel * channels * k_width * k_height) + (current_input_channel * k_width * k_height) + (row_in_block * k_width) + col_in_block];
+        }   
+        int load_position = (current_input_channel * width * height) + (load_position_row * width) + load_position_col;
+        part[row_in_block][col_in_block] = dev_input_image[load_position];
+        __syncthreads();
+        if(in_output_image){
+            for(int i = 0; i < k_width; i++){
+                for(int j = 0; j < k_height; j++){
+                    value += channel_kernel[i][j] * part[row_in_block + i][col_in_block + j];
+                }
+            }
+        }
+    }
+    if(in_output_image){
+        dev_output_image[(thread_output_channel * output_width * output_height) + (load_position_row * output_width) + load_position_col] = value;
+    }
+}
+
+float* conv2D_with_cuda(float* dev_input_image, 
+                        int width, 
+                        int height, 
+                        int channels, 
+                        float* dev_kernel,
+                        int k_width, 
+                        int k_height, 
+                        int output_channels){
+
+    float* dev_output_image = 0;
+    int output_image_width = width - k_width + 1;
+    int output_image_height = height - k_height + 1;
+    int output_image_size = output_image_width * output_image_height * output_channels * sizeof(float);
+    handle(cudaMalloc((void**)dev_output_image, output_image_size), MALLOC_ERROR);
+    dim3 gridDim(CEIL_DIV(width, 32 - k_width + 1), CEIL_DIV(height, 32 - k_height + 1), output_channels);
+    dim3 blockDim(32, 32, 1);
 
 }
 
