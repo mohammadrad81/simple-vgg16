@@ -184,6 +184,19 @@ float* conv2D_with_cuda(float* dev_input_image,
     handle(cudaMalloc((void**)dev_output_image, output_image_size), MALLOC_ERROR);
     dim3 gridDim(CEIL_DIV(width, 32 - k_width + 1), CEIL_DIV(height, 32 - k_height + 1), output_channels);
     dim3 blockDim(32, 32, 1);
+    conv2D_kernel<<<gridDim, blockDim>>>(dev_input_image,
+                                         width,
+                                         height,
+                                         channels,
+                                         dev_kernel,
+                                         k_width,
+                                         k_height,
+                                         dev_output_image,
+                                         output_image_width,
+                                         output_image_height,
+                                         output_channels);
+    handle(cudaDeviceSynchronize(), CNN_ERROR);
+    return dev_output_image;
 
 }
 
