@@ -10,6 +10,7 @@
 #define FC_ERROR "error in FC!"
 #define CEIL_DIV(a, b) ((a + b - 1) / b)
 #define MIN(a, b) (a < b? a : b)
+#define MAX(a, b) (a < b? b : a)
 
 void handle(cudaError_t status, char* message){
     if(status != cudaSuccess){
@@ -198,6 +199,38 @@ float* conv2D_with_cuda(float* dev_input_image,
     handle(cudaDeviceSynchronize(), CNN_ERROR);
     return dev_output_image;
 
+}
+
+__global__ void FC_relu_kernel(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
+    __shared__ float block_value;
+    float thread_value = 0.0;
+    int block_row = blockIdx.x;
+    int thread_col = threadIdx.x;
+    int step = blockDim.x;
+    if(thread_col == 0){
+        block_value = 0;
+    }
+    __syncthreads();
+    for(int i = thread_col; i < input_length; i += step){
+        thread_value += dev_input[i] * parameters[block_row * input_length + i];
+    }
+    atomicAdd(&block_value, thread_value);
+    __syncthreads();
+    if(thread_col == 0){
+        dev_output[block_row] = MAX(block_value, 0);
+    }
+}
+
+float* FC_relu(float* dev_input, int input_length, int output_length, float* parameters){
+    int parameters_height = output_length;
+    int parameters_width = input_length;
+    float* dev_output = 0;
+    handle(cudaMalloc((void**)dev_output, parameters_height * parameters_width * sizeof(float)), MALLOC_ERROR);
+    dim3 gridDim(parameters_height, 1, 1);
+    dim3 blockDim(1024, 1, 1);
+    FC_relu_kernel<<<gridDim, blockDim>>>(dev_input, input_length, dev_output, output_length, parameters);
+    handle(cudaDeviceSynchronize(), FC_ERROR);
+    return dev_output;
 }
 
 float rand_float(){
