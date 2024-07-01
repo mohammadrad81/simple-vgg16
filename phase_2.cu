@@ -2,6 +2,7 @@
 #include <stdlib.h>
 // #include <cuda_runtime.h>
 #include <omp.h>
+#include <time.h>
 
 #define MALLOC_ERROR "could not allocate memory"
 #define CPY_ERROR "could not copy"
@@ -10,6 +11,7 @@
 #define POOL_ERROR "error in pooling!"
 #define CNN_ERROR "error in CNN!"
 #define FC_ERROR "error in FC!"
+#define RELU_ERROR "error in RELU!"
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 #define MIN(a, b) ((a) < (b)? a : b)
 #define MAX(a, b) ((a) < (b)? (b) : (a))
@@ -61,16 +63,16 @@ float* pad_with_cuda(float* dev_input_image,
     int output_image_width = (width + 2 * pad_w);
     int output_image_height = (height + 2 * pad_h);
     int output_image_length = output_image_width * output_image_height * channels;
-    printf("*********************************************\n");
-    printf("in pad_with_cuda\n");
-    printf("width: %d\n", width);
-    printf("height: %d\n", width);
-    printf("channels: %d\n", width);
-    printf("pad_w: %d\n", pad_w);
-    printf("pad_h: %d\n", pad_h);
-    printf("output_image_width: %d\n", output_image_width);
-    printf("output_image_height: %d\n", output_image_height);
-    printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
+    //printf("*********************************************\n");
+    //printf("in pad_with_cuda\n");
+    //printf("width: %d\n", width);
+    //printf("height: %d\n", width);
+    //printf("channels: %d\n", width);
+    //printf("pad_w: %d\n", pad_w);
+    //printf("pad_h: %d\n", pad_h);
+    //printf("output_image_width: %d\n", output_image_width);
+    //printf("output_image_height: %d\n", output_image_height);
+    //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
 
 
     int output_image_size = output_image_length * sizeof(float);
@@ -94,7 +96,7 @@ __global__ void max_pool_2D_kernel(float* dev_input_image,
                         int output_width, 
                         int output_height){
 
-    __shared__ float part[64][16];
+    __shared__ float part[16][64]; // 16 rows, 64 columns
     int row_in_block = threadIdx.y;
     int col_in_block = threadIdx.x;
     int block_row = blockIdx.y;
@@ -107,27 +109,24 @@ __global__ void max_pool_2D_kernel(float* dev_input_image,
     float value = 0.0;
     if(in_input_image){
         value = dev_input_image[load_position];
-    }
-    part[row_in_block][col_in_block] = value;
-    __syncthreads();
-    int block_row_step = blockDim.y / 2;
-    int block_col_step = blockDim.x / 2;
-    int store_row = block_row_step * block_row + row_in_block;
-    int store_col = block_col_step * block_col + col_in_block;
-    if(row_in_block < block_row_step &&
-       col_in_block < block_col_step &&
-       store_row < output_height &&
-       store_col < output_width){
-        int store_position = (channel * output_width * output_height) + (store_row * output_width) + store_col;
-        int row_in_part = 2 * row_in_block;
-        int col_in_part = 2 * col_in_block;
-        value = MAX(part[row_in_part][col_in_part], part[row_in_part][col_in_part + 1]);
-        value = MAX(value, part[row_in_part + 1][col_in_part]);
-        value = MAX(value, part[row_in_part + 1][col_in_part + 1]); 
-        dev_output_image[store_position] = value;
-        if(value > 0.0){
-            printf("max_pooling_vaue: %f\n", value);
+        part[row_in_block][col_in_block] = value;
+        __syncthreads();
+        int block_row_step = blockDim.y / 2;
+        int block_col_step = blockDim.x / 2;
+        int store_row = block_row_step * block_row + row_in_block;
+        int store_col = block_col_step * block_col + col_in_block;
+        if(row_in_block < block_row_step &&
+            col_in_block < block_col_step &&
+            store_row < output_height &&
+            store_col < output_width){
 
+            int store_position = (channel * output_width * output_height) + (store_row * output_width) + store_col;
+            int row_in_part = 2 * row_in_block;
+            int col_in_part = 2 * col_in_block;
+            value = MAX(part[row_in_part][col_in_part], part[row_in_part][col_in_part + 1]);
+            value = MAX(value, part[row_in_part + 1][col_in_part]);
+            value = MAX(value, part[row_in_part + 1][col_in_part + 1]);
+            dev_output_image[store_position] = value;
         }
     }
 }
@@ -141,14 +140,14 @@ float* max_pool_2D_with_cuda(float* dev_input_image,
     int output_image_width = width / 2;
     int output_image_height = height / 2;
     int output_image_length = output_image_width * output_image_height * channels;
-    printf("*********************************************\n");
-    printf("in max_pool_2D_with_cuda\n");
-    printf("width: %d\n", width);
-    printf("height: %d\n", width);
-    printf("channels: %d\n", width);
-    printf("output_image_width: %d\n", output_image_width);
-    printf("output_image_height: %d\n", output_image_height);
-    printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
+    //printf("*********************************************\n");
+    //printf("in max_pool_2D_with_cuda\n");
+    //printf("width: %d\n", width);
+    //printf("height: %d\n", width);
+    //printf("channels: %d\n", width);
+    //printf("output_image_width: %d\n", output_image_width);
+    //printf("output_image_height: %d\n", output_image_height);
+    //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
     int output_image_size = output_image_length * sizeof(float);
     handle(cudaMalloc((void**)&dev_output_image, output_image_size), MALLOC_ERROR, __LINE__);
     dim3 gridDim(CEIL_DIV(width, 64), CEIL_DIV(height, 16), channels);
@@ -222,14 +221,14 @@ float* conv2D_with_cuda(float* dev_input_image,
     int output_image_width = width - k_width + 1;
     int output_image_height = height - k_height + 1;
     int output_image_length = output_image_width * output_image_height * output_channels;
-    printf("*********************************************\n");
-    printf("in conv2D_with_cuda\n");
-    printf("width: %d\n", width);
-    printf("height: %d\n", width);
-    printf("channels: %d\n", width);
-    printf("output_image_width: %d\n", output_image_width);
-    printf("output_image_height: %d\n", output_image_height);
-    printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
+    //printf("*********************************************\n");
+    //printf("in conv2D_with_cuda\n");
+    //printf("width: %d\n", width);
+    //printf("height: %d\n", width);
+    //printf("channels: %d\n", width);
+    //printf("output_image_width: %d\n", output_image_width);
+    //printf("output_image_height: %d\n", output_image_height);
+    //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
     int output_image_size = output_image_length * sizeof(float);
     handle(cudaMalloc((void**)&dev_output_image, output_image_size), MALLOC_ERROR, __LINE__);
     int step_x = 32 - k_width + 1;
@@ -254,24 +253,43 @@ float* conv2D_with_cuda(float* dev_input_image,
 
 }
 
-__global__ void FC_relu_kernel(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
+__global__ void FC_kernel(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
     __shared__ float block_value;
-    float thread_value = 0.0;
-    int block_row = blockIdx.x;
-    int thread_col = threadIdx.x;
-    int step = blockDim.x;
-    if(thread_col == 0){
+    int block_row = blockIdx.y;
+    int block_col = blockIdx.x;
+    int thread_col_in_block = threadIdx.x;
+    int thread_col = blockIdx.x * blockDim.x + threadIdx.x;
+    if(thread_col_in_block == 0){
         block_value = 0;
     }
     __syncthreads();
-    for(int i = thread_col; i < input_length; i += step){
-        thread_value += dev_input[i] * parameters[block_row * input_length + i];
-    }
-    atomicAdd(&block_value, thread_value);
+    // for(int i = thread_col; i < input_length; i += step){
+        // thread_value += dev_input[i] * parameters[block_row * input_length + i];
+    // }
+    float value = dev_input[thread_col] * parameters[block_row * input_length + thread_col];
+    atomicAdd(&block_value, value);
     __syncthreads();
-    if(thread_col == 0){
-        dev_output[block_row] = MAX(block_value, 0);
+    // if(thread_col == 0){
+    //     dev_output[block_row] = MAX(block_value, 0);
+    // }
+    if(thread_col_in_block == 0){
+        atomicAdd(&dev_output[block_row], block_value);
     }
+}
+
+__global__ void RELU_kernel(float* dev_input, int length){
+    int thread_point = blockIdx.x * blockDim.x + threadIdx.x;
+    if(thread_point < length){
+        float value = dev_input[thread_point];
+        dev_input[thread_point] = MAX(value, 0);
+    }
+}
+
+void RELU_with_cuda(float* dev_input, int length){
+    dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
+    dim3 blockDim(1024, 1, 1);
+    RELU_kernel<<<gridDim, blockDim>>>(dev_input, length);
+    handle(cudaDeviceSynchronize(), RELU_ERROR, __LINE__);
 }
 
 float* FC_relu(float* dev_input, int input_length, int output_length, float* parameters){
@@ -279,16 +297,17 @@ float* FC_relu(float* dev_input, int input_length, int output_length, float* par
     int parameters_width = input_length;
     float* dev_output = 0;
     handle(cudaMalloc((void**)&dev_output, parameters_height * parameters_width * sizeof(float)), MALLOC_ERROR, __LINE__);
-    dim3 gridDim(parameters_height, 1, 1);
+    dim3 gridDim(CEIL_DIV(parameters_width, 1024), parameters_height, 1);
     dim3 blockDim(1024, 1, 1);
-    FC_relu_kernel<<<gridDim, blockDim>>>(dev_input, input_length, dev_output, output_length, parameters);
+    FC_kernel<<<gridDim, blockDim>>>(dev_input, input_length, dev_output, output_length, parameters);
     handle(cudaDeviceSynchronize(), FC_ERROR, __LINE__);
+    RELU_with_cuda(dev_output, output_length);
     return dev_output;
 }
 
 float rand_float(){
     // return (2 * (float)(rand()) / (float)(RAND_MAX)) * 2 - 1;
-    return 1.0;
+    return 0.001;
 }
 
 void fill_array(float* array, int length){
@@ -311,11 +330,11 @@ float* copy_to_cuda(float* vector, int length){
 }
 
 float* copy_from_cuda(float* dev_vector, int length){
-    printf("length: %d\n", length);
+    // printf("length: %d\n", length);
     float* vector = (float*)malloc(length * sizeof(float));
-    printf("after vector malloc!\n");
+    // printf("after vector malloc!\n");
     handle(cudaMemcpy(vector, dev_vector, length * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
-    printf("after memcpy!\n");
+    // printf("after memcpy!\n");
     return vector;
 }
 
@@ -327,7 +346,7 @@ float* random_vector_cuda(int length){
 int are_same(float* a, float* b, int length){
     for(int i = 0; i < length; i++){
         if (a[i] != b[i]){
-            printf("%f == a[%d] != b[%d] == %f\n", a[i], i, i, b[i]);
+            // printf("%f == a[%d] != b[%d] == %f\n", a[i], i, i, b[i]);
             return 0;
         }
     }
@@ -366,19 +385,6 @@ float* conv2D_and_pad_with_cuda(float* dev_input_image, int width, int height, i
     float* dev_output_image = conv2D_with_cuda(padded_image, width, height, channels, dev_kernel, kernel_width, kernel_height, output_channels);
     handle(cudaFree(dev_kernel), FREE_ERROR, __LINE__);
     handle(cudaFree(padded_image), FREE_ERROR, __LINE__);
-    float* h_output_image = (float*) malloc(224 * 224 * 64 * sizeof(float));
-    handle(cudaMemcpy(h_output_image, dev_output_image, 224 * 224 * 64 * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
-    for(int c = 0; c < output_channels; c++){
-        for(int i = 0; i < 224; i++){
-            for(int j = 0; j < 224; j++){
-                float value = h_output_image[c * 224 * 224 + i * 224 + j];
-                // if(value > 0.0){
-                    printf("output[%d][%d][%d] = %f\n", c, i, j, value);
-                // }
-            }
-        }
-    }
-    return NULL;
     return dev_output_image;
 }
 
@@ -387,8 +393,20 @@ float* FC_relu_with_cuda(float* dev_input, int input_length, int output_length){
     return FC_relu(dev_input, input_length, output_length, parameters);
 }
 
+void test_FC_relu_with_cuda(){
+    float* input = random_vector_cuda(1000);
+    float* output = FC_relu_with_cuda(input, 1000, 2);
+    float* h_output = copy_from_cuda(output, 2);
+    // printf("%f, %f\n", h_output[0], h_output[1]);
+}
+
+void print_duration(char* message, clock_t start, clock_t end){
+    // printf("%s: \t%lf MS\n", message, 1000.0 * ((float)(end - start)) / ((float)CLOCKS_PER_SEC));
+}
+
 
 void vgg_16(float* h_input_image){
+    clock_t total_start = clock();
     int width = 224;
     int height = 224;
     int channels = 3;
@@ -397,188 +415,251 @@ void vgg_16(float* h_input_image){
     int image_vector_size = channels * width * height * sizeof(float);
     handle(cudaMalloc((void**)&dev_input_image, image_vector_size), MALLOC_ERROR, __LINE__);
     handle(cudaMemcpy(dev_input_image, h_input_image, image_vector_size, cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
+    clock_t move_to_gpu = clock();
+
+    print_duration("move image to global memory", total_start, move_to_gpu);
+    
 
     // ===============  1 =====================
 
+    clock_t start = clock();
     int kernel_width = 3;
     int kernel_height = 3;
     int kernel_channels = 3;
     int output_channels = 64;
     float* dev_output_image = conv2D_and_pad_with_cuda(dev_input_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    // //224 * 224 * 64
+    clock_t end = clock();
+    print_duration("CONV: 224 * 224 * 64", start, end);
 
+    start = clock();
+    width = 224;
+    height = 224;
+    channels = 64;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 64;
+    output_channels = 64;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, 64, 1, 1);
+    end = clock();
+    print_duration("CONV: 224 * 224 * 64", start, end);
+
+    
     // //224 * 224 * 64
 
-    // width = 224;
-    // height = 224;
-    // channels = 64;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 64;
-    // output_channels = 64;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, 64, 1, 1);
-    
-    // //224 * 224 * 64
+    start = clock();
+    width = 224;
+    height = 224;
+    channels = 64;
+    dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    end = clock();
+    print_duration("POOLMAX: 112 * 112 * 64", start, end);
 
-    // width = 224;
-    // height = 224;
-    // channels = 64;
-    // dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
 
-    // printf("phase 1 ended\n");
+    //printf("phase 1 ended\n");
 
-    // // ===============  2 =====================
+    // ===============  2 =====================
 
-    // //112 * 112 * 64
-    // width = 112;
-    // height = 112;
-    // channels = 64;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 64;
-    // output_channels = 128;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
-    
-    // //112 * 112 * 128
-    // width = 112;
-    // height = 112;
-    // channels = 128;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 128;
-    // output_channels = 128;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    //112 * 112 * 64
+    start = clock();
+    width = 112;
+    height = 112;
+    channels = 64;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 64;
+    output_channels = 128;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 112 * 112 * 128", start, end);
 
-    // //112 * 112 * 128
 
-    // width = 112;
-    // height = 112;
-    // channels = 128;
-    // dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    //112 * 112 * 128
+    start = clock();
+    width = 112;
+    height = 112;
+    channels = 128;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 128;
+    output_channels = 128;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 112 * 112 * 128", start, end);
 
-    // printf("phase 2 ended\n");
 
-    // // ===============  3 =====================
+    //112 * 112 * 128
+    start = clock();
+    width = 112;
+    height = 112;
+    channels = 128;
+    dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    end = clock();
+    print_duration("POOLMAX: 56 * 56 * 128", start, end);
 
-    // //56 * 56 * 128
-    // width = 56;
-    // height = 56;
-    // channels = 128;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 128;
-    // output_channels = 256;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    //printf("phase 2 ended\n");
 
-    // //56 * 56 * 256
-    // width = 56;
-    // height = 56;
-    // channels = 256;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 256;
-    // output_channels = 256;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    // ===============  3 =====================
 
-    // //56 * 56 * 256
-    // width = 56;
-    // height = 56;
-    // channels = 256;
-    // dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    //56 * 56 * 128
+    start = clock();
+    width = 56;
+    height = 56;
+    channels = 128;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 128;
+    output_channels = 256;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 56 * 56 * 256", start, end);
 
-    // printf("phase 3 ended\n");
+    //56 * 56 * 256
+    start = clock();
+    width = 56;
+    height = 56;
+    channels = 256;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 256;
+    output_channels = 256;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 56 * 56 * 256", start, end);
 
-    // // ===============  4 =====================
 
-    // //28 * 28 * 256
-    // width = 28;
-    // height = 28;
-    // channels = 256;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 256;
-    // output_channels = 512;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    //56 * 56 * 256
+    start = clock();
+    width = 56;
+    height = 56;
+    channels = 256;
+    dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    end = clock();
+    print_duration("POOLMAX: 28 * 28 * 256", start, end);
 
-    // //28 * 28 * 512
-    // width = 28;
-    // height = 28;
-    // channels = 512;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 512;
-    // output_channels = 512;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    //printf("phase 3 ended\n");
 
-    // width = 28;
-    // height = 28;
-    // channels = 512;
-    // dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    // ===============  4 =====================
 
-    // printf("phase 4 ended\n");
+    //28 * 28 * 256
+    start = clock();
+    width = 28;
+    height = 28;
+    channels = 256;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 256;
+    output_channels = 512;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 28 * 28 * 512", start, end);
 
-    // // ===============  5 =====================
 
-    // //14 * 14 * 512
+    //28 * 28 * 512
+    start = clock();
+    width = 28;
+    height = 28;
+    channels = 512;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 512;
+    output_channels = 512;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 28 * 28 * 512", start, end);
 
-    // width = 14;
-    // height = 14;
-    // channels = 512;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 512;
-    // output_channels = 1024;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
-    
-    // //14 * 14 * 1024
-    // width = 14;
-    // height = 14;
-    // channels = 1024;
-    // kernel_width = 3;
-    // kernel_height = 3;
-    // kernel_channels = 1024;
-    // output_channels = 1024;
-    // dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
-    
-    // //14 * 14 * 1024
-    // width = 14;
-    // height = 14;
-    // channels = 1024;
-    // dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    start = clock();
+    width = 28;
+    height = 28;
+    channels = 512;
+    dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    end = clock();
+    print_duration("POOLMAX: 14 * 14 * 512", start, end);
 
-    // printf("phase 5 ended\n");
 
-    // // ===============  6 =====================
+    //printf("phase 4 ended\n");
 
-    // //7 * 7 * 1024
+    // ===============  5 =====================
 
-    // dev_output_image = FC_relu_with_cuda(dev_output_image, 7 * 7 * 1024, 4096);
-    
-    // // 4096
+    //14 * 14 * 512
+    start = clock();
+    width = 14;
+    height = 14;
+    channels = 512;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 512;
+    output_channels = 1024;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 14 * 14 * 1024", start, end);
 
-    // dev_output_image = FC_relu_with_cuda(dev_output_image, 4096, 4096);
 
-    // // 4096
+    //14 * 14 * 1024
+    start = clock();
+    width = 14;
+    height = 14;
+    channels = 1024;
+    kernel_width = 3;
+    kernel_height = 3;
+    kernel_channels = 1024;
+    output_channels = 1024;
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    end = clock();
+    print_duration("CONV: 14 * 14 * 1024", start, end);
 
-    // dev_output_image = FC_relu_with_cuda(dev_output_image, 4096, 1000);
-    
-    // // 1000
+    //14 * 14 * 1024
+    start = clock();
+    width = 14;
+    height = 14;
+    channels = 1024;
+    dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
+    end = clock();
+    print_duration("POOLMAX: 7 * 7 * 1024", start, end);
 
-    // printf("phase 6 ended\n");
 
-    // float* result = (float*)malloc(1000 * sizeof(float));
-    // handle(cudaMemcpy(result, dev_output_image, 1000 * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
+
+    //printf("phase 5 ended\n");
+
+    // ===============  6 =====================
+
+    //7 * 7 * 1024
+    start = clock();
+    dev_output_image = FC_relu_with_cuda(dev_output_image, 7 * 7 * 1024, 4096);
+    end = clock();
+    print_duration("FC", start, end);
+    // 4096
+
+    start = clock();
+    dev_output_image = FC_relu_with_cuda(dev_output_image, 4096, 4096);
+    end = clock();
+    print_duration("FC", start, end);
+    // 4096
+    start = clock();
+    dev_output_image = FC_relu_with_cuda(dev_output_image, 4096, 1000);
+    end = clock();
+    print_duration("FC", start, end);
+    // 1000
+
+    //printf("phase 6 ended\n");
+
+    float* result = (float*)malloc(1000 * sizeof(float));
+    handle(cudaMemcpy(result, dev_output_image, 1000 * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
+    clock_t total_end = clock();
+    print_duration("copied to cpu memory, total GPU time: ", total_start, total_end);
     // printf("result:\n\n");
     // for(int i = 0; i < 1000; i++){
-    //     printf("%f\n", result[i]);
+        // printf("%f\n", result[i]);
     // }
 }
 
 int main(){
-    srand(42);
+    // srand(42);
     int width = 224;
     int heigth = 224;
     int channels = 3;
     float* random_image = random_vector(width * heigth * channels);
+    // test_FC_relu_with_cuda();
     // for(int i = 0; i < width * heigth * channels; i++){
     //     printf("%f\n", random_image[i]);
     // }
