@@ -10,8 +10,10 @@
 #define PAD_ERROR "error in pading!"
 #define POOL_ERROR "error in pooling!"
 #define CNN_ERROR "error in CNN!"
+#define ZERO_ERROR "error in zero!"
 #define FC_ERROR "error in FC!"
 #define RELU_ERROR "error in RELU!"
+#define ADD_ERROR "error in add"
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 #define MIN(a, b) ((a) < (b)? a : b)
 #define MAX(a, b) ((a) < (b)? (b) : (a))
@@ -23,6 +25,54 @@ void handle(cudaError_t status, char* message, int line){
         printf("line: %d\n", line);
         exit(-1);
     }
+}
+
+float rand_float(){
+    // return (2 * (float)(rand()) / (float)(RAND_MAX)) * 2 - 1;
+    return 0.001;
+}
+
+void fill_array(float* array, int length){
+    for(int i = 0; i < length; i++){
+        array[i] = rand_float();
+    }
+}
+
+float* random_vector(int length){
+    float* params = (float*) malloc(length * sizeof(float));
+    fill_array(params, length);
+    return params;
+}
+
+float* copy_to_cuda(float* vector, int length){
+    float* dev_vector = 0;
+    handle(cudaMalloc((void**)&dev_vector, length * sizeof(float)), MALLOC_ERROR, __LINE__);
+    handle(cudaMemcpy(dev_vector, vector, length * sizeof(float), cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
+    return dev_vector;
+}
+
+float* copy_from_cuda(float* dev_vector, int length){
+    // printf("length: %d\n", length);
+    float* vector = (float*)malloc(length * sizeof(float));
+    // printf("after vector malloc!\n");
+    handle(cudaMemcpy(vector, dev_vector, length * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
+    // printf("after memcpy!\n");
+    return vector;
+}
+
+float* random_vector_cuda(int length){
+    float* params = random_vector(length);
+    return copy_to_cuda(params, length);
+}
+
+int are_same(float* a, float* b, int length){
+    for(int i = 0; i < length; i++){
+        if (a[i] != b[i]){
+            // printf("%f == a[%d] != b[%d] == %f\n", a[i], i, i, b[i]);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 __global__ void pad_kernel(float* dev_input,
@@ -165,6 +215,7 @@ __global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channel
                               float* kernel, // kernel[output_channels][channels][k_height][k_width]
                               int k_width,
                               int k_height,
+                              float* dev_bias, // bias[output_channels]
                               float* dev_output_image,
                               int output_width,
                               int output_height,
@@ -203,7 +254,9 @@ __global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channel
         __syncthreads();
     }
     if(in_output_image){
+        // value += dev_bias[thread_output_channel];
         //relu
+        value = MAX(value, 0);
         dev_output_image[(thread_output_channel * output_width * output_height) + (load_position_row * output_width) + load_position_col] = value;
     }
 }
@@ -214,7 +267,8 @@ float* conv2D_with_cuda(float* dev_input_image,
                         int channels, 
                         float* dev_kernel,
                         int k_width, 
-                        int k_height, 
+                        int k_height,
+                        float* dev_bias,
                         int output_channels){
 
     float* dev_output_image = 0;
@@ -244,6 +298,7 @@ float* conv2D_with_cuda(float* dev_input_image,
                                          dev_kernel,
                                          k_width,
                                          k_height,
+                                         dev_bias,
                                          dev_output_image,
                                          output_image_width,
                                          output_image_height,
@@ -253,7 +308,40 @@ float* conv2D_with_cuda(float* dev_input_image,
 
 }
 
-__global__ void FC_kernel(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
+__global__ void zero_all(float* dev_vector, int length){
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if(i < length){
+        dev_vector[i] = 0.0;
+    }
+}
+
+void zero_with_cuda(float* dev_vector, int length){
+    dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
+    dim3 blockDim(1024, 1, 1);
+    zero_all<<<gridDim, blockDim>>>(dev_vector, length);
+    handle(cudaDeviceSynchronize(), ZERO_ERROR, __LINE__);
+}
+
+__global__ void add_to_vector_1_kernel(float* dev_vector_1, float* dev_vector_2, int length){
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if(i < length){
+        dev_vector_1[i] += dev_vector_2[i];
+    }
+}
+
+void add_to_vector_1_with_cuda(float* dev_vector_1, float* dev_vector_2, int length){
+    dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
+    dim3 blockDim(1024, 1, 1);
+    add_to_vector_1_kernel<<<gridDim, blockDim>>>(dev_vector_1, dev_vector_2, length);
+    handle(cudaDeviceSynchronize(), ADD_ERROR, __LINE__);
+}
+
+__global__ void FC_kernel(float* dev_input,
+                          int input_length,
+                          float* dev_output,
+                          int output_length, 
+                          float* dev_parameters,
+                          float* dev_bias){
     __shared__ float block_value;
     int block_row = blockIdx.y;
     int block_col = blockIdx.x;
@@ -266,7 +354,7 @@ __global__ void FC_kernel(float* dev_input, int input_length, float* dev_output,
     // for(int i = thread_col; i < input_length; i += step){
         // thread_value += dev_input[i] * parameters[block_row * input_length + i];
     // }
-    float value = dev_input[thread_col] * parameters[block_row * input_length + thread_col];
+    float value = dev_input[thread_col] * dev_parameters[block_row * input_length + thread_col];
     atomicAdd(&block_value, value);
     __syncthreads();
     // if(thread_col == 0){
@@ -274,6 +362,30 @@ __global__ void FC_kernel(float* dev_input, int input_length, float* dev_output,
     // }
     if(thread_col_in_block == 0){
         atomicAdd(&dev_output[block_row], block_value);
+    }
+}
+
+__global__ void FC_kernel_improved(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
+    __shared__ float partial_results[1024];
+    int block_row = blockIdx.y;
+    int block_col = blockIdx.x;
+    int thread_col_in_block = threadIdx.x;
+    int thread_col = blockIdx.x * blockDim.x + threadIdx.x;
+    float value = 0.0;
+    if(thread_col < input_length){
+        value = dev_input[thread_col] * parameters[block_row * input_length + thread_col];
+    }
+    partial_results[thread_col_in_block] = value;
+    __syncthreads();
+    for(int stride = 512; stride >= 1; stride /= 2){
+        if(thread_col_in_block < stride){
+            partial_results[thread_col_in_block] += partial_results[thread_col_in_block + stride];
+        }
+        __syncthreads();
+    }
+    __syncthreads();
+    if(thread_col_in_block == 0){
+        atomicAdd(&dev_output[block_row], partial_results[0]);
     }
 }
 
@@ -292,65 +404,19 @@ void RELU_with_cuda(float* dev_input, int length){
     handle(cudaDeviceSynchronize(), RELU_ERROR, __LINE__);
 }
 
-float* FC_relu(float* dev_input, int input_length, int output_length, float* parameters){
+float* FC_relu(float* dev_input, int input_length, int output_length, float* parameters, float* dev_bias){
     int parameters_height = output_length;
     int parameters_width = input_length;
     float* dev_output = 0;
     handle(cudaMalloc((void**)&dev_output, parameters_height * parameters_width * sizeof(float)), MALLOC_ERROR, __LINE__);
     dim3 gridDim(CEIL_DIV(parameters_width, 1024), parameters_height, 1);
     dim3 blockDim(1024, 1, 1);
-    FC_kernel<<<gridDim, blockDim>>>(dev_input, input_length, dev_output, output_length, parameters);
+    zero_with_cuda(dev_output, output_length);
+    FC_kernel_improved<<<gridDim, blockDim>>>(dev_input, input_length, dev_output, output_length, parameters);
     handle(cudaDeviceSynchronize(), FC_ERROR, __LINE__);
+    add_to_vector_1_with_cuda(dev_output, dev_bias, output_length);
     RELU_with_cuda(dev_output, output_length);
     return dev_output;
-}
-
-float rand_float(){
-    // return (2 * (float)(rand()) / (float)(RAND_MAX)) * 2 - 1;
-    return 0.001;
-}
-
-void fill_array(float* array, int length){
-    for(int i = 0; i < length; i++){
-        array[i] = rand_float();
-    }
-}
-
-float* random_vector(int length){
-    float* params = (float*) malloc(length * sizeof(float));
-    fill_array(params, length);
-    return params;
-}
-
-float* copy_to_cuda(float* vector, int length){
-    float* dev_vector = 0;
-    handle(cudaMalloc((void**)&dev_vector, length * sizeof(float)), MALLOC_ERROR, __LINE__);
-    handle(cudaMemcpy(dev_vector, vector, length * sizeof(float), cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
-    return dev_vector;
-}
-
-float* copy_from_cuda(float* dev_vector, int length){
-    // printf("length: %d\n", length);
-    float* vector = (float*)malloc(length * sizeof(float));
-    // printf("after vector malloc!\n");
-    handle(cudaMemcpy(vector, dev_vector, length * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
-    // printf("after memcpy!\n");
-    return vector;
-}
-
-float* random_vector_cuda(int length){
-    float* params = random_vector(length);
-    return copy_to_cuda(params, length);
-}
-
-int are_same(float* a, float* b, int length){
-    for(int i = 0; i < length; i++){
-        if (a[i] != b[i]){
-            // printf("%f == a[%d] != b[%d] == %f\n", a[i], i, i, b[i]);
-            return 0;
-        }
-    }
-    return 1;
 }
 
 float* pad_with_cpu(float* input, int channels, int input_width, int input_height, int pad_w, int pad_h){
@@ -378,26 +444,33 @@ float* pad_with_cpu(float* input, int channels, int input_width, int input_heigh
 float* conv2D_and_pad_with_cuda(float* dev_input_image, int width, int height, int channels, int kernel_width, int kernel_height, int output_channels, int pad_w, int pad_h){
     int image_vector_size = channels * width * height * sizeof(float);
     float* padded_image = pad_with_cuda(dev_input_image, width, height, channels, pad_w, pad_h);
-    handle(cudaFree(dev_input_image), FREE_ERROR, __LINE__);
     width = width + 2 * pad_w;
     height = height + 2 * pad_h;
     float* dev_kernel = random_vector_cuda(output_channels * channels * kernel_width * kernel_height);
-    float* dev_output_image = conv2D_with_cuda(padded_image, width, height, channels, dev_kernel, kernel_width, kernel_height, output_channels);
+    float* dev_bias = random_vector_cuda(output_channels);
+    float* dev_output_image = conv2D_with_cuda(padded_image, width, height, channels, dev_kernel, kernel_width, kernel_height, dev_bias, output_channels);
+    handle(cudaFree(dev_input_image), FREE_ERROR, __LINE__);
     handle(cudaFree(dev_kernel), FREE_ERROR, __LINE__);
     handle(cudaFree(padded_image), FREE_ERROR, __LINE__);
+    handle(cudaFree(dev_bias), FREE_ERROR, __LINE__);
     return dev_output_image;
 }
 
 float* FC_relu_with_cuda(float* dev_input, int input_length, int output_length){
-    float* parameters = random_vector_cuda(input_length * output_length);
-    return FC_relu(dev_input, input_length, output_length, parameters);
+    float* dev_parameters = random_vector_cuda(input_length * output_length);
+    float* dev_bias = random_vector_cuda(output_length);
+    float* result = FC_relu(dev_input, input_length, output_length, dev_parameters, dev_bias);
+    handle(cudaFree(dev_input), FREE_ERROR, __LINE__);
+    handle(cudaFree(dev_parameters), FREE_ERROR, __LINE__);
+    handle(cudaFree(dev_bias), FREE_ERROR, __LINE__);
+    return result;
 }
 
 void test_FC_relu_with_cuda(){
     float* input = random_vector_cuda(1000);
     float* output = FC_relu_with_cuda(input, 1000, 2);
     float* h_output = copy_from_cuda(output, 2);
-    // printf("%f, %f\n", h_output[0], h_output[1]);
+    printf("%f, %f\n", h_output[0], h_output[1]);
 }
 
 void print_duration(char* message, clock_t start, clock_t end){
@@ -456,7 +529,7 @@ void vgg_16(float* h_input_image){
     print_duration("POOLMAX: 112 * 112 * 64", start, end);
 
 
-    //printf("phase 1 ended\n");
+    // printf("phase 1 ended\n");
 
     // ===============  2 =====================
 
@@ -497,7 +570,7 @@ void vgg_16(float* h_input_image){
     end = clock();
     print_duration("POOLMAX: 56 * 56 * 128", start, end);
 
-    //printf("phase 2 ended\n");
+    // printf("phase 2 ended\n");
 
     // ===============  3 =====================
 
@@ -537,7 +610,7 @@ void vgg_16(float* h_input_image){
     end = clock();
     print_duration("POOLMAX: 28 * 28 * 256", start, end);
 
-    //printf("phase 3 ended\n");
+    // printf("phase 3 ended\n");
 
     // ===============  4 =====================
 
@@ -577,7 +650,7 @@ void vgg_16(float* h_input_image){
     print_duration("POOLMAX: 14 * 14 * 512", start, end);
 
 
-    //printf("phase 4 ended\n");
+    // printf("phase 4 ended\n");
 
     // ===============  5 =====================
 
@@ -619,7 +692,7 @@ void vgg_16(float* h_input_image){
 
 
 
-    //printf("phase 5 ended\n");
+    // printf("phase 5 ended\n");
 
     // ===============  6 =====================
 
@@ -641,7 +714,7 @@ void vgg_16(float* h_input_image){
     print_duration("FC", start, end);
     // 1000
 
-    //printf("phase 6 ended\n");
+    // printf("phase 6 ended\n");
 
     float* result = (float*)malloc(1000 * sizeof(float));
     handle(cudaMemcpy(result, dev_output_image, 1000 * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
