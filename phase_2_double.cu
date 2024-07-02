@@ -27,56 +27,43 @@ void handle(cudaError_t status, char* message, int line){
     }
 }
 
-float rand_float(){
-    // return (2 * (float)(rand()) / (float)(RAND_MAX)) * 2 - 1;
+double rand_double(){
+    // return (2 * (double)(rand()) / (double)(RAND_MAX)) * 2 - 1;
     return 0.001;
 }
 
-void fill_array(float* array, int length){
+void fill_array(double* array, int length){
     for(int i = 0; i < length; i++){
-        array[i] = rand_float();
+        array[i] = rand_double();
     }
 }
 
-float* random_vector(int length){
-    float* params = (float*) malloc(length * sizeof(float));
+double* random_vector(int length){
+    double* params = (double*) malloc(length * sizeof(double));
     fill_array(params, length);
     return params;
 }
 
-float* copy_to_cuda(float* vector, int length){
-    float* dev_vector = 0;
-    handle(cudaMalloc((void**)&dev_vector, length * sizeof(float)), MALLOC_ERROR, __LINE__);
-    handle(cudaMemcpy(dev_vector, vector, length * sizeof(float), cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
+double* copy_to_cuda(double* vector, int length){
+    double* dev_vector = 0;
+    handle(cudaMalloc((void**)&dev_vector, length * sizeof(double)), MALLOC_ERROR, __LINE__);
+    handle(cudaMemcpy(dev_vector, vector, length * sizeof(double), cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
     return dev_vector;
 }
 
-float* copy_from_cuda(float* dev_vector, int length){
-    // printf("length: %d\n", length);
-    float* vector = (float*)malloc(length * sizeof(float));
-    // printf("after vector malloc!\n");
-    handle(cudaMemcpy(vector, dev_vector, length * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
-    // printf("after memcpy!\n");
+double* copy_from_cuda(double* dev_vector, int length){
+    double* vector = (double*)malloc(length * sizeof(double));
+    handle(cudaMemcpy(vector, dev_vector, length * sizeof(double), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
     return vector;
 }
 
-float* random_vector_cuda(int length){
-    float* params = random_vector(length);
+double* random_vector_cuda(int length){
+    double* params = random_vector(length);
     return copy_to_cuda(params, length);
 }
 
-int are_same(float* a, float* b, int length){
-    for(int i = 0; i < length; i++){
-        if (a[i] != b[i]){
-            // printf("%f == a[%d] != b[%d] == %f\n", a[i], i, i, b[i]);
-            return 0;
-        }
-    }
-    return 1;
-}
-
-__global__ void pad_kernel(float* dev_input,
-                           float* dev_output,
+__global__ void pad_kernel(double* dev_input,
+                           double* dev_output,
                            int width,
                            int height,
                            int channels,
@@ -90,53 +77,31 @@ __global__ void pad_kernel(float* dev_input,
     int channel = blockIdx.z;
     int output_position = (channel * output_width * output_height) + (row * output_width) + col;
     int input_position = (channel * width * height) + ((row - pad_h) * width) + (col - pad_w);
-    float value = 0.0;
+    double value = 0.0;
     if((row < output_height) && (col < output_height) && (channel < channels)){
-        if(output_position > (channels * output_width * output_height) || output_position < 0){
-            printf("illegal output position: %d\n", output_position);
-        }
         if((row < pad_h) || (row >= height + pad_h) || (col < pad_w) || (col >= width + pad_w)){ // in pad
-                value = 0;
+                value = 0.0;
         }
         else{ // not in pad
-            if(input_position > (channels * width * height) || input_position < 0){
-                printf("illegal input position: %d\n", input_position);
-            }
             value = dev_input[input_position];
         }
         dev_output[output_position] = value;
     }
 }
 
-float* pad_with_cuda(float* dev_input_image,
+double* pad_with_cuda(double* dev_input_image,
                      int width,
                      int height,
                      int channels, 
                      int pad_w, 
                      int pad_h){
     
-    int input_image_size = width * height * channels;
     int output_image_width = (width + 2 * pad_w);
     int output_image_height = (height + 2 * pad_h);
     int output_image_length = output_image_width * output_image_height * channels;
-    //printf("*********************************************\n");
-    //printf("in pad_with_cuda\n");
-    //printf("width: %d\n", width);
-    //printf("height: %d\n", width);
-    //printf("channels: %d\n", width);
-    //printf("pad_w: %d\n", pad_w);
-    //printf("pad_h: %d\n", pad_h);
-    //printf("output_image_width: %d\n", output_image_width);
-    //printf("output_image_height: %d\n", output_image_height);
-    //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
-
-
-    int output_image_size = output_image_length * sizeof(float);
-
-    float* dev_output_image;
-    // printf("before cuda malloc!\n");
-    handle(cudaMalloc((void**)&dev_output_image, output_image_width * output_image_height * channels * sizeof(float)), MALLOC_ERROR, __LINE__);
-    // printf("after cuda malloc!\n");
+    int output_image_size = output_image_length * sizeof(double);
+    double* dev_output_image;
+    handle(cudaMalloc((void**)&dev_output_image, output_image_width * output_image_height * channels * sizeof(double)), MALLOC_ERROR, __LINE__);
     dim3 gridDim(CEIL_DIV(output_image_width, 32), CEIL_DIV(output_image_height, 32), channels);
     dim3 blockDim(32, 32, 1);
     pad_kernel<<<gridDim, blockDim>>>(dev_input_image, dev_output_image, width, height, channels, pad_w, pad_h, output_image_width, output_image_height);
@@ -144,15 +109,14 @@ float* pad_with_cuda(float* dev_input_image,
     return dev_output_image;
 }
 
-__global__ void max_pool_2D_kernel(float* dev_input_image,
-                        float* dev_output_image, 
+__global__ void max_pool_2D_kernel(double* dev_input_image,
+                        double* dev_output_image, 
                         int width,
                         int height, 
                         int channels, 
                         int output_width, 
                         int output_height){
-
-    __shared__ float part[16][64]; // 16 rows, 64 columns
+    __shared__ double part[16][64]; // 16 rows, 64 columns
     int row_in_block = threadIdx.y;
     int col_in_block = threadIdx.x;
     int block_row = blockIdx.y;
@@ -162,13 +126,13 @@ __global__ void max_pool_2D_kernel(float* dev_input_image,
     int channel = blockIdx.z;
     int load_position = (channel * width * height) + (row * width) + col;
     int in_input_image = row < height && col < width;
-    float value = 0.0;
+    double value = 0.0;
     if(in_input_image){
         value = dev_input_image[load_position];
         part[row_in_block][col_in_block] = value;
         __syncthreads();
-        int block_row_step = blockDim.y / 2;
-        int block_col_step = blockDim.x / 2;
+        int block_row_step = blockDim.y / 2; // 8
+        int block_col_step = blockDim.x / 2; // 32
         int store_row = block_row_step * block_row + row_in_block;
         int store_col = block_col_step * block_col + col_in_block;
         if(row_in_block < block_row_step &&
@@ -187,24 +151,16 @@ __global__ void max_pool_2D_kernel(float* dev_input_image,
     }
 }
 
-float* max_pool_2D_with_cuda(float* dev_input_image, 
+double* max_pool_2D_with_cuda(double* dev_input_image, 
                              int width, 
                              int height, 
                              int channels){
 
-    float* dev_output_image = 0;
+    double* dev_output_image = 0;
     int output_image_width = width / 2;
     int output_image_height = height / 2;
     int output_image_length = output_image_width * output_image_height * channels;
-    //printf("*********************************************\n");
-    //printf("in max_pool_2D_with_cuda\n");
-    //printf("width: %d\n", width);
-    //printf("height: %d\n", width);
-    //printf("channels: %d\n", width);
-    //printf("output_image_width: %d\n", output_image_width);
-    //printf("output_image_height: %d\n", output_image_height);
-    //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
-    int output_image_size = output_image_length * sizeof(float);
+    int output_image_size = output_image_length * sizeof(double);
     handle(cudaMalloc((void**)&dev_output_image, output_image_size), MALLOC_ERROR, __LINE__);
     dim3 gridDim(CEIL_DIV(width, 64), CEIL_DIV(height, 16), channels);
     dim3 blockDim(64, 16, 1);
@@ -214,20 +170,20 @@ float* max_pool_2D_with_cuda(float* dev_input_image,
     return dev_output_image;
 }
 
-__global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channels][heigth][width]
+__global__ void conv2D_kernel(double* dev_input_image, // dev_input_image[channels][heigth][width]
                               int width,
                               int height,
                               int channels,
-                              float* kernel, // kernel[output_channels][channels][k_height][k_width]
+                              double* kernel, // kernel[output_channels][channels][k_height][k_width]
                               int k_width,
                               int k_height,
-                              float* dev_bias, // bias[output_channels]
-                              float* dev_output_image,
+                              double* dev_bias, // bias[output_channels]
+                              double* dev_output_image,
                               int output_width,
                               int output_height,
                               int output_channels){ 
-    __shared__ float part[32][32];
-    __shared__ float channel_kernel[10][10];
+    __shared__ double part[32][32];
+    __shared__ double channel_kernel[10][10];
     int row_in_block = threadIdx.y;
     int col_in_block = threadIdx.x;
     int block_row = blockIdx.y;
@@ -240,7 +196,7 @@ __global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channel
     int in_input_image = load_position_row < height && load_position_col < width;
     int in_output_image = (!in_block_load_margin) && (load_position_row < (output_height)) && (load_position_col < (output_width));
     int thread_output_channel = blockIdx.z;
-    float value = 0.0;
+    double value = 0.0;
     for(int current_input_channel = 0; current_input_channel < channels; current_input_channel++){
         if(row_in_block < k_height && col_in_block < k_width){
             channel_kernel[row_in_block][col_in_block] = kernel[(thread_output_channel * channels * k_width * k_height) + (current_input_channel * k_width * k_height) + (row_in_block * k_width) + col_in_block];
@@ -267,17 +223,17 @@ __global__ void conv2D_kernel(float* dev_input_image, // dev_input_image[channel
     }
 }
 
-float* conv2D_with_cuda(float* dev_input_image, 
+double* conv2D_with_cuda(double* dev_input_image, 
                         int width, 
                         int height, 
                         int channels, 
-                        float* dev_kernel,
+                        double* dev_kernel,
                         int k_width, 
                         int k_height,
-                        float* dev_bias,
+                        double* dev_bias,
                         int output_channels){
 
-    float* dev_output_image = 0;
+    double* dev_output_image = 0;
     int output_image_width = width - k_width + 1;
     int output_image_height = height - k_height + 1;
     int output_image_length = output_image_width * output_image_height * output_channels;
@@ -289,7 +245,7 @@ float* conv2D_with_cuda(float* dev_input_image,
     //printf("output_image_width: %d\n", output_image_width);
     //printf("output_image_height: %d\n", output_image_height);
     //printf("output_image_length: %d * %d * %d = %d\n", output_image_width, output_image_height, channels, output_image_length);
-    int output_image_size = output_image_length * sizeof(float);
+    int output_image_size = output_image_length * sizeof(double);
     handle(cudaMalloc((void**)&dev_output_image, output_image_size), MALLOC_ERROR, __LINE__);
     int step_x = 32 - k_width + 1;
     int step_y = 32 - k_height + 1;
@@ -314,70 +270,41 @@ float* conv2D_with_cuda(float* dev_input_image,
 
 }
 
-__global__ void zero_all(float* dev_vector, int length){
+__global__ void zero_all_kernel(double* dev_vector, int length){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if(i < length){
         dev_vector[i] = 0.0;
     }
 }
 
-void zero_with_cuda(float* dev_vector, int length){
+void zero_with_cuda(double* dev_vector, int length){
     dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
     dim3 blockDim(1024, 1, 1);
-    zero_all<<<gridDim, blockDim>>>(dev_vector, length);
+    zero_all_kernel<<<gridDim, blockDim>>>(dev_vector, length);
     handle(cudaDeviceSynchronize(), ZERO_ERROR, __LINE__);
 }
 
-__global__ void add_to_vector_1_kernel(float* dev_vector_1, float* dev_vector_2, int length){
+__global__ void add_to_vector_1_kernel(double* dev_vector_1, double* dev_vector_2, int length){
     int i = blockDim.x * blockIdx.x + threadIdx.x;
     if(i < length){
         dev_vector_1[i] += dev_vector_2[i];
     }
 }
 
-void add_to_vector_1_with_cuda(float* dev_vector_1, float* dev_vector_2, int length){
+void add_to_vector_1_with_cuda(double* dev_vector_1, double* dev_vector_2, int length){
     dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
     dim3 blockDim(1024, 1, 1);
     add_to_vector_1_kernel<<<gridDim, blockDim>>>(dev_vector_1, dev_vector_2, length);
     handle(cudaDeviceSynchronize(), ADD_ERROR, __LINE__);
 }
 
-__global__ void FC_kernel(float* dev_input,
-                          int input_length,
-                          float* dev_output,
-                          int output_length, 
-                          float* dev_parameters,
-                          float* dev_bias){
-    __shared__ float block_value;
+__global__ void FC_kernel_improved(double* dev_input, int input_length, double* dev_output, int output_length, double* parameters){
+    __shared__ double partial_results[1024];
     int block_row = blockIdx.y;
     int block_col = blockIdx.x;
     int thread_col_in_block = threadIdx.x;
     int thread_col = blockIdx.x * blockDim.x + threadIdx.x;
-    if(thread_col_in_block == 0){
-        block_value = 0;
-    }
-    __syncthreads();
-    // for(int i = thread_col; i < input_length; i += step){
-        // thread_value += dev_input[i] * parameters[block_row * input_length + i];
-    // }
-    float value = dev_input[thread_col] * dev_parameters[block_row * input_length + thread_col];
-    atomicAdd(&block_value, value);
-    __syncthreads();
-    // if(thread_col == 0){
-    //     dev_output[block_row] = MAX(block_value, 0);
-    // }
-    if(thread_col_in_block == 0){
-        atomicAdd(&dev_output[block_row], block_value);
-    }
-}
-
-__global__ void FC_kernel_improved(float* dev_input, int input_length, float* dev_output, int output_length, float* parameters){
-    __shared__ float partial_results[1024];
-    int block_row = blockIdx.y;
-    int block_col = blockIdx.x;
-    int thread_col_in_block = threadIdx.x;
-    int thread_col = blockIdx.x * blockDim.x + threadIdx.x;
-    float value = 0.0;
+    double value = 0.0;
     if(thread_col < input_length){
         value = dev_input[thread_col] * parameters[block_row * input_length + thread_col];
     }
@@ -389,32 +316,31 @@ __global__ void FC_kernel_improved(float* dev_input, int input_length, float* de
         }
         __syncthreads();
     }
-    __syncthreads();
     if(thread_col_in_block == 0){
         atomicAdd(&dev_output[block_row], partial_results[0]);
     }
 }
 
-__global__ void RELU_kernel(float* dev_input, int length){
+__global__ void RELU_kernel(double* dev_input, int length){
     int thread_point = blockIdx.x * blockDim.x + threadIdx.x;
     if(thread_point < length){
-        float value = dev_input[thread_point];
+        double value = dev_input[thread_point];
         dev_input[thread_point] = MAX(value, 0);
     }
 }
 
-void RELU_with_cuda(float* dev_input, int length){
+void RELU_with_cuda(double* dev_input, int length){
     dim3 gridDim(CEIL_DIV(length, 1024), 1, 1);
     dim3 blockDim(1024, 1, 1);
     RELU_kernel<<<gridDim, blockDim>>>(dev_input, length);
     handle(cudaDeviceSynchronize(), RELU_ERROR, __LINE__);
 }
 
-float* FC_relu(float* dev_input, int input_length, int output_length, float* parameters, float* dev_bias){
+double* FC_relu(double* dev_input, int input_length, int output_length, double* parameters, double* dev_bias){
     int parameters_height = output_length;
     int parameters_width = input_length;
-    float* dev_output = 0;
-    handle(cudaMalloc((void**)&dev_output, parameters_height * parameters_width * sizeof(float)), MALLOC_ERROR, __LINE__);
+    double* dev_output = 0;
+    handle(cudaMalloc((void**)&dev_output, parameters_height * parameters_width * sizeof(double)), MALLOC_ERROR, __LINE__);
     dim3 gridDim(CEIL_DIV(parameters_width, 1024), parameters_height, 1);
     dim3 blockDim(1024, 1, 1);
     zero_with_cuda(dev_output, output_length);
@@ -425,36 +351,15 @@ float* FC_relu(float* dev_input, int input_length, int output_length, float* par
     return dev_output;
 }
 
-float* pad_with_cpu(float* input, int channels, int input_width, int input_height, int pad_w, int pad_h){
-    int output_width = input_width + pad_w - 1;
-    int output_height = input_height + pad_h - 1;
-    float* output = (float*) malloc(output_width * output_height * sizeof(float));
-    // printf("before parallel region!\n");
-    for(int c = 0; c < channels; c++){
-        for(int i = 0; i < output_height; i++){
-            for(int j = 0; j < output_width; j++){
-                // printf("%d\n", j);
-                if(i < pad_h || i >= output_height + pad_h || j < pad_w || j >= output_width + pad_w){
-                    output[(c * output_width * output_height) + i * output_width + j] = input[(i - pad_h) * output_width + j - pad_w];
-                }
-                else{
-                    output[(c * output_width * output_height) + i * output_width + j] = 0;
-                }
-            }
-        }
-    }
-    // printf("after parallel region!\n");
-    return output;
-}
-
-float* conv2D_and_pad_with_cuda(float* dev_input_image, int width, int height, int channels, int kernel_width, int kernel_height, int output_channels, int pad_w, int pad_h){
-    int image_vector_size = channels * width * height * sizeof(float);
-    float* padded_image = pad_with_cuda(dev_input_image, width, height, channels, pad_w, pad_h);
+double* conv2D_and_pad_with_cuda(double* dev_input_image, int width, int height, int channels, int kernel_width, int kernel_height, int output_channels, int pad_w, int pad_h){
+    int image_vector_size = channels * width * height * sizeof(double);
+    double* padded_image = pad_with_cuda(dev_input_image, width, height, channels, pad_w, pad_h);
+    // printf("padding ended\n");
     width = width + 2 * pad_w;
     height = height + 2 * pad_h;
-    float* dev_kernel = random_vector_cuda(output_channels * channels * kernel_width * kernel_height);
-    float* dev_bias = random_vector_cuda(output_channels);
-    float* dev_output_image = conv2D_with_cuda(padded_image, width, height, channels, dev_kernel, kernel_width, kernel_height, dev_bias, output_channels);
+    double* dev_kernel = random_vector_cuda(output_channels * channels * kernel_width * kernel_height);
+    double* dev_bias = random_vector_cuda(output_channels);
+    double* dev_output_image = conv2D_with_cuda(padded_image, width, height, channels, dev_kernel, kernel_width, kernel_height, dev_bias, output_channels);
     handle(cudaFree(dev_input_image), FREE_ERROR, __LINE__);
     handle(cudaFree(dev_kernel), FREE_ERROR, __LINE__);
     handle(cudaFree(padded_image), FREE_ERROR, __LINE__);
@@ -462,36 +367,29 @@ float* conv2D_and_pad_with_cuda(float* dev_input_image, int width, int height, i
     return dev_output_image;
 }
 
-float* FC_relu_with_cuda(float* dev_input, int input_length, int output_length){
-    float* dev_parameters = random_vector_cuda(input_length * output_length);
-    float* dev_bias = random_vector_cuda(output_length);
-    float* result = FC_relu(dev_input, input_length, output_length, dev_parameters, dev_bias);
+double* FC_relu_with_cuda(double* dev_input, int input_length, int output_length){
+    double* dev_parameters = random_vector_cuda(input_length * output_length);
+    double* dev_bias = random_vector_cuda(output_length);
+    double* result = FC_relu(dev_input, input_length, output_length, dev_parameters, dev_bias);
     handle(cudaFree(dev_input), FREE_ERROR, __LINE__);
     handle(cudaFree(dev_parameters), FREE_ERROR, __LINE__);
     handle(cudaFree(dev_bias), FREE_ERROR, __LINE__);
     return result;
 }
 
-void test_FC_relu_with_cuda(){
-    float* input = random_vector_cuda(1000);
-    float* output = FC_relu_with_cuda(input, 1000, 2);
-    float* h_output = copy_from_cuda(output, 2);
-    printf("%f, %f\n", h_output[0], h_output[1]);
-}
-
 void print_duration(char* message, clock_t start, clock_t end){
-    // printf("%s: \t%lf MS\n", message, 1000.0 * ((float)(end - start)) / ((float)CLOCKS_PER_SEC));
+    printf("%s: \t%lf MS\n", message, 1000.0 * ((double)(end - start)) / ((double)CLOCKS_PER_SEC));
 }
 
 
-void vgg_16(float* h_input_image){
+void vgg_16(double* h_input_image){
     clock_t total_start = clock();
     int width = 224;
     int height = 224;
     int channels = 3;
-    float* dev_input_image = 0;
+    double* dev_input_image = 0;
     // 224 * 224 * 3
-    int image_vector_size = channels * width * height * sizeof(float);
+    int image_vector_size = channels * width * height * sizeof(double);
     handle(cudaMalloc((void**)&dev_input_image, image_vector_size), MALLOC_ERROR, __LINE__);
     handle(cudaMemcpy(dev_input_image, h_input_image, image_vector_size, cudaMemcpyHostToDevice), CPY_ERROR, __LINE__);
     clock_t move_to_gpu = clock();
@@ -506,7 +404,7 @@ void vgg_16(float* h_input_image){
     int kernel_height = 3;
     int kernel_channels = 3;
     int output_channels = 64;
-    float* dev_output_image = conv2D_and_pad_with_cuda(dev_input_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
+    double* dev_output_image = conv2D_and_pad_with_cuda(dev_input_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
     // //224 * 224 * 64
     clock_t end = clock();
     print_duration("CONV: 224 * 224 * 64", start, end);
@@ -519,7 +417,7 @@ void vgg_16(float* h_input_image){
     kernel_height = 3;
     kernel_channels = 64;
     output_channels = 64;
-    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, 64, 1, 1);
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_height, output_channels, 1, 1);
     end = clock();
     print_duration("CONV: 224 * 224 * 64", start, end);
 
@@ -629,7 +527,7 @@ void vgg_16(float* h_input_image){
     kernel_height = 3;
     kernel_channels = 256;
     output_channels = 512;
-    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, output_channels, 1, 1);
     end = clock();
     print_duration("CONV: 28 * 28 * 512", start, end);
 
@@ -643,7 +541,7 @@ void vgg_16(float* h_input_image){
     kernel_height = 3;
     kernel_channels = 512;
     output_channels = 512;
-    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, channels, 1, 1);
+    dev_output_image = conv2D_and_pad_with_cuda(dev_output_image, width, height, channels, kernel_width, kernel_width, output_channels, 1, 1);
     end = clock();
     print_duration("CONV: 28 * 28 * 512", start, end);
 
@@ -654,9 +552,6 @@ void vgg_16(float* h_input_image){
     dev_output_image = max_pool_2D_with_cuda(dev_output_image, width, height, channels);
     end = clock();
     print_duration("POOLMAX: 14 * 14 * 512", start, end);
-
-
-    // printf("phase 4 ended\n");
 
     // ===============  5 =====================
 
@@ -696,10 +591,6 @@ void vgg_16(float* h_input_image){
     end = clock();
     print_duration("POOLMAX: 7 * 7 * 1024", start, end);
 
-
-
-    // printf("phase 5 ended\n");
-
     // ===============  6 =====================
 
     //7 * 7 * 1024
@@ -720,37 +611,24 @@ void vgg_16(float* h_input_image){
     print_duration("FC", start, end);
     // 1000
 
-    // printf("phase 6 ended\n");
-
-    float* result = (float*)malloc(1000 * sizeof(float));
-    handle(cudaMemcpy(result, dev_output_image, 1000 * sizeof(float), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
+    double* result = (double*)malloc(1000 * sizeof(double));
+    handle(cudaMemcpy(result, dev_output_image, 1000 * sizeof(double), cudaMemcpyDeviceToHost), CPY_ERROR, __LINE__);
+    // for(int i = 0; i < 1000; i++){
+        // printf("result[%d] = %lf\n", i, result[i]);
+    // }
     clock_t total_end = clock();
     print_duration("copied to cpu memory, total GPU time: ", total_start, total_end);
-    // printf("result:\n\n");
-    // for(int i = 0; i < 1000; i++){
-        // printf("%f\n", result[i]);
-    // }
 }
 
 int main(){
-    // srand(42);
+    clock_t start = clock();
+    srand(42);
     int width = 224;
     int heigth = 224;
     int channels = 3;
-    float* random_image = random_vector(width * heigth * channels);
-    // test_FC_relu_with_cuda();
-    // for(int i = 0; i < width * heigth * channels; i++){
-    //     printf("%f\n", random_image[i]);
-    // }
+    double* random_image = random_vector(width * heigth * channels);
     vgg_16(random_image);
-    // int length = 100000000;
-    // float* array = (float*) malloc(length * sizeof(float));
-    // fill_array(array, length);
-    // return 0;
-    // float* x;
-    // cudaMalloc((void**)&x, 1 * sizeof(float));
-    // pad_with_cuda(0, 0, 0, 0, 0, 0);
-    // float* x = 0;
-    // cudaMalloc((void**)&x, 224 * 224 * 3 * sizeof(float));
-    // return 0;
+    clock_t end = clock();
+    printf("total execution: %f seconds\n", ((double)(end - start)) / ((double)(CLOCKS_PER_SEC)));
+
 }
